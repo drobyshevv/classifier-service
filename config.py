@@ -1,7 +1,7 @@
 import os
 
 # Конфигурация
-DB_PATH = 'classifier.db'
+DB_PATH = 'service.db'
 CSV_FOLDER = 'csv_data'  # Папка с CSV в корне проекта
 
 # Пути к CSV файлам
