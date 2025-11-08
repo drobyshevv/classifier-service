@@ -1,0 +1,11 @@
+# System files
+.DS_Store
+
+# DATABASE FILES
+*.db
+*.sqlite
+*.sqlite3
+storage/
+
+# DATA FILES
+csv_data/
