@@ -1,6 +1,10 @@
 version: "3"
 
 tasks:
+  run:
+    desc: "Run SSO server"
+    cmds:
+      - go run cmd/server/main.go -config config/local.yaml
   migrate:
     desc: "Run database migrations"
     cmds:
