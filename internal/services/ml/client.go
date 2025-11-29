@@ -29,6 +29,62 @@ func NewMLServiceClient(grpcAddr string) (*MLServiceClient, error) {
 	}, nil
 }
 
+func (c *MLServiceClient) AnalyzeUserQuery(
+	ctx context.Context,
+	userQuery string,
+	contextType string,
+) (*agentv1.QueryAnalysisResponse, error) {
+
+	resp, err := c.client.AnalyzeUserQuery(ctx, &agentv1.QueryAnalysisRequest{
+		UserQuery: userQuery,
+		Context:   contextType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("AnalyzeUserQuery failed: %w", err)
+	}
+
+	return resp, nil
+}
+
+func (c *MLServiceClient) SemanticArticleSearch(
+	ctx context.Context,
+	req *agentv1.SemanticSearchRequest,
+) (*agentv1.SemanticSearchResponse, error) {
+
+	resp, err := c.client.SemanticArticleSearch(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("SemanticArticleSearch failed: %w", err)
+	}
+
+	return resp, nil
+}
+
+func (c *MLServiceClient) AnalyzeExpertsByTopic(
+	ctx context.Context,
+	req *agentv1.ExpertAnalysisRequest,
+) (*agentv1.ExpertAnalysisResponse, error) {
+
+	resp, err := c.client.AnalyzeExpertsByTopic(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("AnalyzeExpertsByTopic failed: %w", err)
+	}
+
+	return resp, nil
+}
+
+func (c *MLServiceClient) AnalyzeDepartmentsByTopic(
+	ctx context.Context,
+	req *agentv1.DepartmentAnalysisRequest,
+) (*agentv1.DepartmentAnalysisResponse, error) {
+
+	resp, err := c.client.AnalyzeDepartmentsByTopic(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("AnalyzeDepartmentsByTopic failed: %w", err)
+	}
+
+	return resp, nil
+}
+
 func (c *MLServiceClient) AnalyzeArticleTopics(ctx context.Context, documentID, title, abstract string) (*ArticleAnalysisResult, error) {
 	resp, err := c.client.AnalyzeArticleTopics(ctx, &agentv1.ArticleAnalysisRequest{
 		DocumentId: documentID,

@@ -104,3 +104,72 @@ type Article struct {
 	RelevanceScore float32  `json:"relevance_score"`
 	MatchedTopics  []string `json:"matched_topics"`
 }
+
+type ArticleTopic struct {
+	TopicName  string  `json:"topic_name"`
+	Confidence float32 `json:"confidence"`
+	TopicType  string  `json:"topic_type"`
+}
+
+// Структура для передачи статьи с векторами в семантический поиск
+type SemanticArticle struct {
+	DocumentID        string
+	TitleRu           string
+	AbstractRu        string
+	TitleEmbedding    []byte // marshaled []float32
+	AbstractEmbedding []byte // marshaled []float32
+}
+
+type SemanticArticleSearchRequest struct {
+	Query      string
+	MaxResults int
+	Offset     int
+}
+
+type SemanticArticleResult struct {
+	DocumentID     string
+	TitleRu        string
+	AbstractRu     string
+	Year           int32
+	Authors        []string
+	RelevanceScore float32
+	MatchedTopics  []string
+}
+
+type SemanticArticleSearchResponse struct {
+	Results    []SemanticArticleResult
+	TotalFound int
+}
+type SemanticSearchRequest struct {
+	QueryVector []float32              `json:"query_vector"`
+	Articles    []SemanticArticleForML `json:"articles"`
+	MaxResults  int                    `json:"max_results"`
+}
+
+type SemanticArticleForML struct {
+	DocumentID        string    `json:"document_id"`
+	TitleRu           string    `json:"title_ru"`
+	AbstractRu        string    `json:"abstract_ru"`
+	TitleEmbedding    []float32 `json:"title_embedding"`
+	AbstractEmbedding []float32 `json:"abstract_embedding"`
+}
+
+type SemanticSearchResponse struct {
+	Results    []SemanticArticleMLResult `json:"results"`
+	TotalFound int                       `json:"total_found"`
+}
+
+type SemanticArticleMLResult struct {
+	DocumentID      string   `json:"document_id"`
+	RelevanceScore  float32  `json:"relevance_score"`
+	MatchedConcepts []string `json:"matched_concepts"`
+}
+
+type QueryAnalysisRequest struct {
+	UserQuery string `json:"user_query"`
+	Context   string `json:"context"`
+}
+
+type QueryAnalysisResponse struct {
+	QueryVector []float32 `json:"query_vector"`
+}

@@ -7,6 +7,8 @@ github.com/drobyshevv/proto-ai-agent v0.0.2 h1:rdX1pfsjICE9W7le5XLT/htMfZGY8cew3
 github.com/drobyshevv/proto-ai-agent v0.0.2/go.mod h1:iJwtnecMCpviYnfKqrEAnmvexgG417mFzrQETlVv9AM=
 github.com/drobyshevv/proto-classifier-expert-search v0.0.4 h1:l6R+sGozwSNVMQdjff8JZzMwCErvftTOKMTriiQ4wLg=
 github.com/drobyshevv/proto-classifier-expert-search v0.0.4/go.mod h1:DlzRyNPL96kZ5U6Dhx+6hZj8ZMTaEhQTsaAqoNQw4qg=
+github.com/drobyshevv/proto-classifier-expert-search v0.0.6 h1:UHun3BaXchltc7oevnkf5s93Bz/w53ULI7Wgs/MUk/M=
+github.com/drobyshevv/proto-classifier-expert-search v0.0.6/go.mod h1:DlzRyNPL96kZ5U6Dhx+6hZj8ZMTaEhQTsaAqoNQw4qg=
 github.com/go-logr/logr v1.4.3 h1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=
 github.com/go-logr/logr v1.4.3/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
 github.com/go-logr/stdr v1.2.2 h1:hSWxHoqTgW2S2qGc0LTAI563KZ5YKYRhT3MFKZMbjag=

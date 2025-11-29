@@ -2,12 +2,16 @@ package expert
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"time"
 
 	"github.com/drobyshevv/classifier-expert-search/internal/models"
+	"github.com/drobyshevv/classifier-expert-search/internal/services/ml"
+	agentv1 "github.com/drobyshevv/proto-ai-agent/gen/go/proto/ai_agent"
 )
 
 // Интерфейсы
@@ -18,6 +22,7 @@ type ArticleSaver interface {
 type ArticleProvider interface {
 	GetArticle(ctx context.Context, id string) (*models.Article, error)
 	SearchArticles(ctx context.Context, query string, limit int) ([]*models.Article, error)
+	SearchArticlesPaged(ctx context.Context, limit, offset int) ([]models.Article, error)
 }
 
 type ExpertProvider interface {
@@ -32,6 +37,13 @@ type DepartmentProvider interface {
 type VectorProvider interface {
 	GetArticleVectors(ctx context.Context, articleIDs []string) (map[string][]float32, error)
 	SearchSimilar(ctx context.Context, vector []float32, limit int) ([]string, error)
+	SaveArticleEmbedding(ctx context.Context, documentID string, titleEmbedding, abstractEmbedding []float32) error
+	HasArticleEmbedding(ctx context.Context, documentID string) (bool, error)
+
+	SaveArticleTopics(ctx context.Context, documentID string, topics []models.ArticleTopic) error
+	RecalculateAggregatesForDocument(ctx context.Context, documentID string) error
+	ClearEmbeddingsAndTopics(ctx context.Context) error
+	ListArticlesForSemantic(ctx context.Context, limit int) ([]models.SemanticArticle, error)
 }
 
 type TopicAnalyzer interface {
@@ -46,7 +58,7 @@ type Service struct {
 	departmentProvider DepartmentProvider
 	vectorProvider     VectorProvider
 	topicAnalyzer      TopicAnalyzer
-	//mlService          *ml.MLServiceClient
+	mlService          *ml.MLServiceClient
 }
 
 func New(
@@ -57,6 +69,7 @@ func New(
 	departmentProvider DepartmentProvider,
 	vectorProvider VectorProvider,
 	topicAnalyzer TopicAnalyzer,
+	mlService *ml.MLServiceClient,
 ) *Service {
 	return &Service{
 		log:                log,
@@ -66,9 +79,11 @@ func New(
 		departmentProvider: departmentProvider,
 		vectorProvider:     vectorProvider,
 		topicAnalyzer:      topicAnalyzer,
+		mlService:          mlService,
 	}
 }
 
+/*
 func (s *Service) InitializeSystem(
 	ctx context.Context,
 	req *models.InitializeRequest,
@@ -155,6 +170,508 @@ func (s *Service) InitializeSystem(
 		StartedAt:                 time.Now().Format(time.RFC3339),
 		CurrentArticle:            "Все статьи обработаны",
 	}, nil
+}
+*/
+/* v2
+func (s *Service) InitializeSystem(
+	ctx context.Context,
+	req *models.InitializeRequest,
+) (*models.InitializeResponse, error) {
+	const op = "expert.Service.InitializeSystem"
+
+	log := s.log.With(slog.String("op", op))
+	log.Info("starting system initialization",
+		slog.Bool("force_reload", req.ForceReload),
+		slog.Int("batch_size", int(req.BatchSize)),
+		slog.Int("specific_docs_count", len(req.SpecificDocuments)),
+	)
+
+	// Получаем все статьи для обработки
+	allArticles, err := s.articleProvider.SearchArticles(ctx, "", 1000)
+	if err != nil {
+		return nil, fmt.Errorf("%s: failed to get articles: %w", op, err)
+	}
+
+	if len(allArticles) == 0 {
+		return nil, fmt.Errorf("%s: no articles found in database", op)
+	}
+
+	// Фильтруем по specific_documents если указаны
+	var articlesToProcess []*models.Article
+	if len(req.SpecificDocuments) > 0 {
+		for _, article := range allArticles {
+			for _, docID := range req.SpecificDocuments {
+				if article.DocumentID == docID {
+					articlesToProcess = append(articlesToProcess, article)
+					break
+				}
+			}
+		}
+	} else {
+		articlesToProcess = allArticles
+	}
+
+	// Применяем batch size
+	if int32(len(articlesToProcess)) > req.BatchSize {
+		articlesToProcess = articlesToProcess[:req.BatchSize]
+	}
+
+	jobID := fmt.Sprintf("job-%d", time.Now().Unix())
+
+	log.Info("generating semantic vectors for articles",
+		slog.String("job_id", jobID),
+		slog.Int("articles_to_process", len(articlesToProcess)),
+	)
+
+	// ГЕНЕРИРУЕМ ВЕКТОРЫ ЧЕРЕЗ ML СЕРВИС
+	processedCount := 0
+	for _, article := range articlesToProcess {
+		// Вызываем AI Agent для генерации эмбеддингов
+		analysisResult, err := s.mlService.AnalyzeArticleTopics(ctx, article.DocumentID, article.TitleRu, article.AbstractRu)
+		if err != nil {
+			log.Warn("failed to generate embeddings for article",
+				slog.String("document_id", article.DocumentID),
+				slog.String("error", err.Error()))
+			continue
+		}
+
+		log.Info("DEBUG: Received analysis result",
+			slog.String("document_id", article.DocumentID),
+			slog.Int("title_embedding_len", len(analysisResult.TitleEmbedding)),
+			slog.Int("abstract_embedding_len", len(analysisResult.AbstractEmbedding)),
+			slog.String("title_preview", string(analysisResult.TitleEmbedding[:min(50, len(analysisResult.TitleEmbedding))])),
+			slog.String("abstract_preview", string(analysisResult.AbstractEmbedding[:min(50, len(analysisResult.AbstractEmbedding))])),
+		)
+
+		// Декодируем base64 эмбеддинги в float32
+		titleVector, err := bytesToFloat32(analysisResult.TitleEmbedding)
+		if err != nil {
+			log.Warn("failed to decode title embedding",
+				slog.String("document_id", article.DocumentID),
+				slog.String("error", err.Error()))
+			continue
+		}
+
+		abstractVector, err := bytesToFloat32(analysisResult.AbstractEmbedding)
+		if err != nil {
+			log.Warn("failed to decode abstract embedding",
+				slog.String("document_id", article.DocumentID),
+				slog.String("error", err.Error()))
+			continue
+		}
+
+		// СОХРАНЯЕМ ВЕКТОРЫ В БАЗУ
+		err = s.vectorProvider.SaveArticleEmbedding(ctx, article.DocumentID, titleVector, abstractVector)
+		if err != nil {
+			log.Warn("failed to save article embedding",
+				slog.String("document_id", article.DocumentID),
+				slog.String("error", err.Error()))
+			continue
+		}
+
+		// Обновляем статью с информацией о релевантности
+		article.RelevanceScore = calculateRelevanceScore(titleVector)
+
+		// Сохраняем тематики
+		var matchedTopics []string
+		for _, topic := range analysisResult.Topics {
+			matchedTopics = append(matchedTopics, topic.TopicName)
+		}
+		article.MatchedTopics = matchedTopics
+
+		processedCount++
+	}
+
+	log.Info("system initialization completed",
+		slog.String("job_id", jobID),
+		slog.Int("processed_articles", processedCount),
+	)
+
+	return &models.InitializeResponse{
+		JobID:                     jobID,
+		Status:                    "completed",
+		TotalArticles:             int32(len(articlesToProcess)),
+		ProcessedArticles:         int32(processedCount),
+		EstimatedRemainingSeconds: 0,
+		StartedAt:                 time.Now().Format(time.RFC3339),
+		CurrentArticle:            "Все статьи обработаны",
+	}, nil
+}
+
+*/
+
+//TODO: обработать documents
+//TODO: безопасные батчи/распараллелевание
+//FIXME: Нулевые векторы - ПРОБЛЕМА!  Добавить проверку в коде
+// добавить проверку на нулевые векторы чтобы не засорять базу бесполезными данными!
+
+func (s *Service) InitializeSystem(
+	ctx context.Context,
+	req *models.InitializeRequest,
+) (*models.InitializeResponse, error) {
+	const op = "expert.Service.InitializeSystem"
+
+	log := s.log.With(slog.String("op", op))
+	log.Info("starting system initialization",
+		slog.Bool("force_reload", req.ForceReload),
+		slog.Int("batch_size", int(req.BatchSize)),
+		slog.Int("specific_docs_count", len(req.SpecificDocuments)),
+	)
+
+	// batch size default
+	batchSize := 50
+	if req.BatchSize > 0 && req.BatchSize < 50 {
+		batchSize = int(req.BatchSize)
+	}
+
+	// force reload: очистка таблиц
+	if req.ForceReload {
+		if err := s.vectorProvider.ClearEmbeddingsAndTopics(ctx); err != nil {
+			log.Warn("failed to clear embeddings/topics", slog.String("error", err.Error()))
+		} else {
+			log.Info("cleared embeddings and topics due to force_reload")
+		}
+	}
+
+	offset := 0
+	totalProcessed := 0
+	hasMore := true
+
+	jobID := fmt.Sprintf("job-%d", time.Now().Unix())
+
+	log.Info("starting batch processing",
+		slog.String("job_id", jobID),
+		slog.Int("batch_size", batchSize),
+	)
+
+	for hasMore {
+		log.Info("processing batch",
+			slog.Int("batch_number", offset/batchSize+1),
+			slog.Int("offset", offset),
+		)
+
+		// get batch (use storage method which returns limited number)
+		batchArticles, err := s.articleProvider.SearchArticlesPaged(ctx, batchSize, offset)
+		if err != nil {
+			return nil, fmt.Errorf("%s: failed to get articles batch: %w", op, err)
+		}
+
+		if len(batchArticles) == 0 {
+			hasMore = false
+			log.Info("no more articles to process")
+			break
+		}
+
+		batchProcessed := 0
+		for i, article := range batchArticles {
+			// progress log
+			if i%10 == 0 {
+				log.Info("batch progress",
+					slog.Int("batch_processed", i),
+					slog.Int("batch_total", len(batchArticles)),
+					slog.Int("total_processed", totalProcessed),
+				)
+			}
+
+			// skip existing if asked
+			if req.SkipExisting {
+				hasVector, herr := s.vectorProvider.HasArticleEmbedding(ctx, article.DocumentID)
+				if herr == nil && hasVector {
+					log.Debug("skipping article with existing embedding",
+						slog.String("document_id", article.DocumentID))
+					continue
+				}
+			}
+
+			// call ML
+			analysisResult, err := s.mlService.AnalyzeArticleTopics(ctx, article.DocumentID, article.TitleRu, article.AbstractRu)
+			if err != nil {
+				log.Warn("failed to generate embeddings for article",
+					slog.String("document_id", article.DocumentID),
+					slog.String("error", err.Error()))
+				continue
+			}
+
+			// decode bytes -> []float32 (service bytesToFloat32 helper)
+			titleVector, err := bytesToFloat32(analysisResult.TitleEmbedding)
+			if err != nil {
+				log.Warn("failed to decode title embedding",
+					slog.String("document_id", article.DocumentID),
+					slog.String("error", err.Error()))
+				continue
+			}
+			abstractVector, err := bytesToFloat32(analysisResult.AbstractEmbedding)
+			if err != nil {
+				log.Warn("failed to decode abstract embedding",
+					slog.String("document_id", article.DocumentID),
+					slog.String("error", err.Error()))
+				continue
+			}
+
+			// Проверка: хотя бы один вектор не нулевой
+			titleZero := isZeroVector(titleVector)
+			abstractZero := isZeroVector(abstractVector)
+
+			if titleZero && abstractZero {
+				log.Warn("skipping article because both embeddings are zero",
+					slog.String("document_id", article.DocumentID),
+				)
+				continue
+			}
+
+			// Если title пустой — используем abstract вместо него
+			if titleZero && !abstractZero {
+				titleVector = abstractVector
+				log.Info("title embedding was zero, replaced with abstract embedding",
+					slog.String("document_id", article.DocumentID))
+			}
+
+			// Если abstract пустой — используем title вместо него
+			if abstractZero && !titleZero {
+				abstractVector = titleVector
+				log.Info("abstract embedding was zero, replaced with title embedding",
+					slog.String("document_id", article.DocumentID))
+			}
+
+			// save embeddings
+			if err := s.vectorProvider.SaveArticleEmbedding(ctx, article.DocumentID, titleVector, abstractVector); err != nil {
+				log.Warn("failed to save article embedding",
+					slog.String("document_id", article.DocumentID),
+					slog.String("error", err.Error()))
+				continue
+			}
+
+			// save topics (if any)
+			if len(analysisResult.Topics) > 0 {
+				var topics []models.ArticleTopic
+				for _, t := range analysisResult.Topics {
+					topics = append(topics, models.ArticleTopic{
+						TopicName:  t.TopicName,
+						Confidence: t.Confidence,
+						TopicType:  t.TopicType,
+					})
+				}
+				if err := s.vectorProvider.SaveArticleTopics(ctx, article.DocumentID, topics); err != nil {
+					log.Warn("failed to save article topics",
+						slog.String("document_id", article.DocumentID),
+						slog.String("error", err.Error()))
+				} else {
+					// recalc aggregates (topic_experts, department_topics)
+					if err := s.vectorProvider.RecalculateAggregatesForDocument(ctx, article.DocumentID); err != nil {
+						log.Warn("failed to recalc aggregates",
+							slog.String("document_id", article.DocumentID),
+							slog.String("error", err.Error()))
+					}
+				}
+			}
+
+			batchProcessed++
+			totalProcessed++
+		}
+
+		log.Info("batch completed",
+			slog.Int("batch_number", offset/batchSize+1),
+			slog.Int("batch_processed", batchProcessed),
+			slog.Int("total_processed", totalProcessed),
+		)
+
+		// next slice - currently using SearchArticles with limit (so increment offset by batchSize)
+		offset += batchSize
+
+		// small sleep
+		time.Sleep(2 * time.Second)
+	}
+
+	totalArticles, err := s.getTotalArticlesCount(ctx)
+	if err != nil {
+		log.Warn("failed to get total articles count", slog.String("error", err.Error()))
+		totalArticles = totalProcessed
+	}
+
+	log.Info("system initialization completed",
+		slog.String("job_id", jobID),
+		slog.Int("total_processed", totalProcessed),
+		slog.Int("total_articles", totalArticles),
+	)
+
+	return &models.InitializeResponse{
+		JobID:                     jobID,
+		Status:                    "completed",
+		TotalArticles:             int32(totalArticles),
+		ProcessedArticles:         int32(totalProcessed),
+		EstimatedRemainingSeconds: 0,
+		StartedAt:                 time.Now().Format(time.RFC3339),
+		CurrentArticle:            fmt.Sprintf("Обработано %d из %d статей", totalProcessed, totalArticles),
+	}, nil
+}
+
+// Вспомогательные методы
+
+func isZeroVector(v []float32) bool {
+	if len(v) == 0 {
+		return true
+	}
+	for _, x := range v {
+		if x != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) getArticlesBatch(ctx context.Context, offset, limit int) ([]*models.Article, error) {
+	// Используем существующий метод SearchArticles с большим лимитом и фильтрацией по offset
+	allArticles, err := s.articleProvider.SearchArticles(ctx, "", 100000)
+	if err != nil {
+		return nil, err
+	}
+
+	// Ручная пагинация (в идеале добавить пагинацию в storage)
+	if offset >= len(allArticles) {
+		return []*models.Article{}, nil
+	}
+
+	end := offset + limit
+	if end > len(allArticles) {
+		end = len(allArticles)
+	}
+
+	return allArticles[offset:end], nil
+}
+
+func (s *Service) getTotalArticlesCount(ctx context.Context) (int, error) {
+	articles, err := s.articleProvider.SearchArticles(ctx, "", 100000)
+	if err != nil {
+		return 0, err
+	}
+	return len(articles), nil
+}
+
+func bytesToFloat32(data []byte) ([]float32, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty data")
+	}
+
+	if len(data)%4 != 0 {
+		return nil, fmt.Errorf("data length %d not divisible by 4", len(data))
+	}
+
+	vector := make([]float32, len(data)/4)
+	for i := 0; i < len(vector); i++ {
+		bits := binary.LittleEndian.Uint32(data[i*4 : (i+1)*4])
+		vector[i] = math.Float32frombits(bits)
+	}
+
+	return vector, nil
+}
+
+func (s *Service) SemanticSearchArticles(
+	ctx context.Context,
+	req *models.SemanticArticleSearchRequest,
+) (*models.SemanticArticleSearchResponse, error) {
+
+	log := s.log.With(slog.String("op", "SemanticSearchArticles"))
+	log.Info("semantic search articles", slog.String("query", req.Query))
+
+	desired := req.MaxResults
+	if desired <= 0 {
+		desired = 10
+	}
+
+	// -----------------------------
+	// 1. Анализ запроса
+	// -----------------------------
+	qResp, err := s.mlService.AnalyzeUserQuery(ctx, req.Query, "article_search")
+	if err != nil {
+		return nil, fmt.Errorf("failed to analyze query: %w", err)
+	}
+
+	if len(qResp.QueryVector) == 0 {
+		return nil, fmt.Errorf("empty query vector from ML")
+	}
+
+	// -----------------------------
+	// 2. Получаем статьи
+	// -----------------------------
+	limit := desired + req.Offset
+	items, err := s.vectorProvider.ListArticlesForSemantic(ctx, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed list articles: %w", err)
+	}
+
+	if len(items) == 0 {
+		return &models.SemanticArticleSearchResponse{}, nil
+	}
+
+	// -----------------------------
+	// 3. Готовим proto ArticleForSearch
+	// -----------------------------
+	protoArticles := make([]*agentv1.ArticleForSearch, 0, len(items))
+
+	for _, a := range items {
+		protoArticles = append(protoArticles, &agentv1.ArticleForSearch{
+			DocumentId:        a.DocumentID,
+			TitleRu:           a.TitleRu,
+			AbstractRu:        a.AbstractRu,
+			TitleEmbedding:    a.TitleEmbedding,    // []byte OK
+			AbstractEmbedding: a.AbstractEmbedding, // []byte OK
+		})
+		log.Info("emb_len", slog.Int("title", len(a.TitleEmbedding)), slog.Int("abstract", len(a.AbstractEmbedding)))
+
+	}
+
+	// -----------------------------
+	// 4. Proto запрос в AI Agent
+	// -----------------------------
+	protoReq := &agentv1.SemanticSearchRequest{
+		QueryVector: qResp.QueryVector, // []byte
+		Articles:    protoArticles,
+		MaxResults:  int32(desired),
+	}
+
+	protoResp, err := s.mlService.SemanticArticleSearch(ctx, protoReq)
+	if err != nil {
+		return nil, fmt.Errorf("python semantic search failed: %w", err)
+	}
+
+	// -----------------------------
+	// 5. Собираем результат
+	// -----------------------------
+	results := make([]models.SemanticArticleResult, 0, len(protoResp.Results))
+
+	fastMeta := map[string]models.SemanticArticle{}
+	for _, a := range items {
+		fastMeta[a.DocumentID] = a
+	}
+
+	for _, r := range protoResp.Results {
+		m := fastMeta[r.DocumentId]
+
+		art, _ := s.articleProvider.GetArticle(ctx, r.DocumentId)
+
+		results = append(results, models.SemanticArticleResult{
+			DocumentID:     r.DocumentId,
+			TitleRu:        m.TitleRu,
+			AbstractRu:     m.AbstractRu,
+			Year:           art.Year,
+			Authors:        art.Authors,
+			RelevanceScore: r.RelevanceScore,
+			MatchedTopics:  r.MatchedConcepts,
+		})
+	}
+
+	return &models.SemanticArticleSearchResponse{
+		Results:    results,
+		TotalFound: int(protoResp.TotalFound),
+	}, nil
+}
+
+func float32ToBytes(v []float32) []byte {
+	buf := make([]byte, len(v)*4)
+	for i, f := range v {
+		binary.LittleEndian.PutUint32(buf[i*4:(i+1)*4], math.Float32bits(f))
+	}
+	return buf
 }
 
 func (s *Service) GetInitializationStatus(

@@ -25,6 +25,8 @@ type Expert interface {
 	AnalyzeTopic(ctx context.Context, req *models.TopicAnalysisRequest) (*models.TopicAnalysisResponse, error)
 
 	SearchArticles(ctx context.Context, req *models.ArticleSearchRequest) (*models.ArticleSearchResponse, error)
+
+	SemanticSearchArticles(ctx context.Context, req *models.SemanticArticleSearchRequest) (*models.SemanticArticleSearchResponse, error)
 }
 
 type serverAPI struct {
@@ -69,6 +71,54 @@ func (s *serverAPI) InitializeSystem(ctx context.Context, req *servicev1.Initial
 	}, nil
 }
 
+func (s *serverAPI) SemanticSearchArticles(ctx context.Context, req *servicev1.SemanticArticleSearchRequest) (*servicev1.SemanticArticleSearchResponse, error) {
+	// validate
+	q := req.GetQuery()
+	if q == "" {
+		return nil, status.Error(codes.InvalidArgument, "query cannot be empty")
+	}
+	if utf8.RuneCountInString(q) > 500 {
+		return nil, status.Error(codes.InvalidArgument, "query too long (max 500 chars)")
+	}
+	max := int(req.GetMaxResults())
+	if max <= 0 {
+		max = 10
+	}
+	if max > 200 {
+		return nil, status.Error(codes.InvalidArgument, "max_results cannot exceed 200")
+	}
+
+	modelReq := &models.SemanticArticleSearchRequest{
+		Query:      q,
+		MaxResults: max,
+		Offset:     int(req.GetOffset()),
+	}
+
+	modelResp, err := s.expert.SemanticSearchArticles(ctx, modelReq)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "semantic search failed: %v", err)
+	}
+
+	// map response
+	results := make([]*servicev1.Article, 0, len(modelResp.Results))
+	for _, a := range modelResp.Results {
+		results = append(results, &servicev1.Article{
+			DocumentId:     a.DocumentID,
+			TitleRu:        a.TitleRu,
+			AbstractRu:     a.AbstractRu,
+			Year:           a.Year,
+			Authors:        a.Authors,
+			RelevanceScore: a.RelevanceScore,
+			MatchedTopics:  a.MatchedTopics,
+		})
+	}
+
+	return &servicev1.SemanticArticleSearchResponse{
+		Results:    results,
+		TotalFound: int32(modelResp.TotalFound),
+	}, nil
+}
+
 func (s *serverAPI) GetInitializationStatus(
 	ctx context.Context,
 	req *servicev1.InitializationStatusRequest,
@@ -102,6 +152,77 @@ func (s *serverAPI) GetInitializationStatus(
 	}, nil
 }
 
+/*
+Поиск идёт ТОЛЬКО по ФИО.
+
+Это не соответствует твоей архитектуре, которая должна искать:
+
+по теме
+
+по смыслу запроса
+
+по картине экспертизы (topic_experts)
+
+по embeddings (semantic search)
+
+по тематикам статей (article_topics)
+
+Сначала анализируем запрос пользователем через AI:
+AnalyzeUserQuery
+
+Получаем:
+
+нормализованную тему
+
+вектор запроса
+
+тип запроса (topic / keywords / name)
+
+Если пользователь ищет по ФИО — тогда действительно искать по фамилии
+query: "Горлов М.И."
+ISEXPERT = true (определено AI по QueryType)
+
+→ тогда SQL по ФИО — корректно.
+Но если запрос = тема
+
+То поиск должен идти по таблице:
+topic_experts
+Если AI классифицирует запрос как семантический
+
+(например "Глубокое обучение в медицине")
+
+→ SearchExperts должен:
+
+Достать topic_experts по близким темам
+
+# Использовать enhanceExpertSearchWithVectors
+
+# Построить similarity между topic vector и author topic vector
+
+Т.е. SearchExperts должен:
+
+работать на topic_experts + embeddings + AI
+
+Какую логику нужно реализовать
+✔ Если пользователь ищет по ФИО
+
+→ SQL по таблице authors
+
+✔ Если пользователь ищет по теме
+
+→ SQL по topic_experts
+
+✔ Если запрос сложный (семантический)
+
+→ mix: topic_experts + enhanceExpertSearchWithVectors
+
+Итоговое правило
+Текущий SearchExperts (по ФИО) — оставить,
+
+но вызывать только когда AI определил, что запрос = ФИО.
+
+Для всех остальных запросов — новая реализация через topic_experts.
+*/
 func (s *serverAPI) SearchExperts(
 	ctx context.Context,
 	req *servicev1.ExpertSearchRequest,

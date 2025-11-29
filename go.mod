@@ -3,7 +3,7 @@ module github.com/drobyshevv/classifier-expert-search
 go 1.25.1
 
 require (
-	github.com/drobyshevv/proto-classifier-expert-search v0.0.4
+	github.com/drobyshevv/proto-classifier-expert-search v0.0.6
 	github.com/golang-migrate/migrate/v4 v4.19.0
 	google.golang.org/grpc v1.75.1
 )
