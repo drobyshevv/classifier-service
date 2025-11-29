@@ -83,7 +83,6 @@ func New(
 	}
 }
 
-/*
 func (s *Service) InitializeSystem(
 	ctx context.Context,
 	req *models.InitializeRequest,
@@ -97,234 +96,11 @@ func (s *Service) InitializeSystem(
 		slog.Int("specific_docs_count", len(req.SpecificDocuments)),
 	)
 
-	// Получаем все статьи для обработки
-	allArticles, err := s.articleProvider.SearchArticles(ctx, "", 1000)
-	if err != nil {
-		return nil, fmt.Errorf("%s: failed to get articles: %w", op, err)
-	}
-
-	if len(allArticles) == 0 {
-		return nil, fmt.Errorf("%s: no articles found in database", op)
-	}
-
-	// Фильтруем по specific_documents если указаны
-	var articlesToProcess []*models.Article
-	if len(req.SpecificDocuments) > 0 {
-		for _, article := range allArticles {
-			for _, docID := range req.SpecificDocuments {
-				if article.DocumentID == docID {
-					articlesToProcess = append(articlesToProcess, article)
-					break
-				}
-			}
-		}
-	} else {
-		articlesToProcess = allArticles
-	}
-
-	// Применяем batch size
-	if int32(len(articlesToProcess)) > req.BatchSize {
-		articlesToProcess = articlesToProcess[:req.BatchSize]
-	}
-
-	jobID := fmt.Sprintf("job-%d", time.Now().Unix())
-
-	log.Info("calculating semantic vectors for articles",
-		slog.String("job_id", jobID),
-		slog.Int("articles_to_process", len(articlesToProcess)),
-	)
-
-	// Получаем векторы для всех статей
-	articleIDs := make([]string, len(articlesToProcess))
-	for i, article := range articlesToProcess {
-		articleIDs[i] = article.DocumentID
-	}
-
-	vectors, err := s.vectorProvider.GetArticleVectors(ctx, articleIDs)
-	if err != nil {
-		return nil, fmt.Errorf("%s: failed to get article vectors: %w", op, err)
-	}
-
-	// Сохраняем статьи с обновленной информацией о релевантности
-	processedCount := 0
-	for _, article := range articlesToProcess {
-		if vector, exists := vectors[article.DocumentID]; exists && len(vector) > 0 {
-			// Обновляем статью с информацией о векторе
-			// В реальности здесь можно добавить поле Vector или сохранить в отдельную таблицу
-			article.RelevanceScore = calculateRelevanceScore(vector)
-			processedCount++
-		}
-	}
-
-	log.Info("system initialization completed",
-		slog.String("job_id", jobID),
-		slog.Int("processed_articles", processedCount),
-	)
-
-	return &models.InitializeResponse{
-		JobID:                     jobID,
-		Status:                    "completed",
-		TotalArticles:             int32(len(articlesToProcess)),
-		ProcessedArticles:         int32(processedCount),
-		EstimatedRemainingSeconds: 0,
-		StartedAt:                 time.Now().Format(time.RFC3339),
-		CurrentArticle:            "Все статьи обработаны",
-	}, nil
-}
-*/
-/* v2
-func (s *Service) InitializeSystem(
-	ctx context.Context,
-	req *models.InitializeRequest,
-) (*models.InitializeResponse, error) {
-	const op = "expert.Service.InitializeSystem"
-
-	log := s.log.With(slog.String("op", op))
-	log.Info("starting system initialization",
-		slog.Bool("force_reload", req.ForceReload),
-		slog.Int("batch_size", int(req.BatchSize)),
-		slog.Int("specific_docs_count", len(req.SpecificDocuments)),
-	)
-
-	// Получаем все статьи для обработки
-	allArticles, err := s.articleProvider.SearchArticles(ctx, "", 1000)
-	if err != nil {
-		return nil, fmt.Errorf("%s: failed to get articles: %w", op, err)
-	}
-
-	if len(allArticles) == 0 {
-		return nil, fmt.Errorf("%s: no articles found in database", op)
-	}
-
-	// Фильтруем по specific_documents если указаны
-	var articlesToProcess []*models.Article
-	if len(req.SpecificDocuments) > 0 {
-		for _, article := range allArticles {
-			for _, docID := range req.SpecificDocuments {
-				if article.DocumentID == docID {
-					articlesToProcess = append(articlesToProcess, article)
-					break
-				}
-			}
-		}
-	} else {
-		articlesToProcess = allArticles
-	}
-
-	// Применяем batch size
-	if int32(len(articlesToProcess)) > req.BatchSize {
-		articlesToProcess = articlesToProcess[:req.BatchSize]
-	}
-
-	jobID := fmt.Sprintf("job-%d", time.Now().Unix())
-
-	log.Info("generating semantic vectors for articles",
-		slog.String("job_id", jobID),
-		slog.Int("articles_to_process", len(articlesToProcess)),
-	)
-
-	// ГЕНЕРИРУЕМ ВЕКТОРЫ ЧЕРЕЗ ML СЕРВИС
-	processedCount := 0
-	for _, article := range articlesToProcess {
-		// Вызываем AI Agent для генерации эмбеддингов
-		analysisResult, err := s.mlService.AnalyzeArticleTopics(ctx, article.DocumentID, article.TitleRu, article.AbstractRu)
-		if err != nil {
-			log.Warn("failed to generate embeddings for article",
-				slog.String("document_id", article.DocumentID),
-				slog.String("error", err.Error()))
-			continue
-		}
-
-		log.Info("DEBUG: Received analysis result",
-			slog.String("document_id", article.DocumentID),
-			slog.Int("title_embedding_len", len(analysisResult.TitleEmbedding)),
-			slog.Int("abstract_embedding_len", len(analysisResult.AbstractEmbedding)),
-			slog.String("title_preview", string(analysisResult.TitleEmbedding[:min(50, len(analysisResult.TitleEmbedding))])),
-			slog.String("abstract_preview", string(analysisResult.AbstractEmbedding[:min(50, len(analysisResult.AbstractEmbedding))])),
-		)
-
-		// Декодируем base64 эмбеддинги в float32
-		titleVector, err := bytesToFloat32(analysisResult.TitleEmbedding)
-		if err != nil {
-			log.Warn("failed to decode title embedding",
-				slog.String("document_id", article.DocumentID),
-				slog.String("error", err.Error()))
-			continue
-		}
-
-		abstractVector, err := bytesToFloat32(analysisResult.AbstractEmbedding)
-		if err != nil {
-			log.Warn("failed to decode abstract embedding",
-				slog.String("document_id", article.DocumentID),
-				slog.String("error", err.Error()))
-			continue
-		}
-
-		// СОХРАНЯЕМ ВЕКТОРЫ В БАЗУ
-		err = s.vectorProvider.SaveArticleEmbedding(ctx, article.DocumentID, titleVector, abstractVector)
-		if err != nil {
-			log.Warn("failed to save article embedding",
-				slog.String("document_id", article.DocumentID),
-				slog.String("error", err.Error()))
-			continue
-		}
-
-		// Обновляем статью с информацией о релевантности
-		article.RelevanceScore = calculateRelevanceScore(titleVector)
-
-		// Сохраняем тематики
-		var matchedTopics []string
-		for _, topic := range analysisResult.Topics {
-			matchedTopics = append(matchedTopics, topic.TopicName)
-		}
-		article.MatchedTopics = matchedTopics
-
-		processedCount++
-	}
-
-	log.Info("system initialization completed",
-		slog.String("job_id", jobID),
-		slog.Int("processed_articles", processedCount),
-	)
-
-	return &models.InitializeResponse{
-		JobID:                     jobID,
-		Status:                    "completed",
-		TotalArticles:             int32(len(articlesToProcess)),
-		ProcessedArticles:         int32(processedCount),
-		EstimatedRemainingSeconds: 0,
-		StartedAt:                 time.Now().Format(time.RFC3339),
-		CurrentArticle:            "Все статьи обработаны",
-	}, nil
-}
-
-*/
-
-//TODO: обработать documents
-//TODO: безопасные батчи/распараллелевание
-//FIXME: Нулевые векторы - ПРОБЛЕМА!  Добавить проверку в коде
-// добавить проверку на нулевые векторы чтобы не засорять базу бесполезными данными!
-
-func (s *Service) InitializeSystem(
-	ctx context.Context,
-	req *models.InitializeRequest,
-) (*models.InitializeResponse, error) {
-	const op = "expert.Service.InitializeSystem"
-
-	log := s.log.With(slog.String("op", op))
-	log.Info("starting system initialization",
-		slog.Bool("force_reload", req.ForceReload),
-		slog.Int("batch_size", int(req.BatchSize)),
-		slog.Int("specific_docs_count", len(req.SpecificDocuments)),
-	)
-
-	// batch size default
 	batchSize := 50
 	if req.BatchSize > 0 && req.BatchSize < 50 {
 		batchSize = int(req.BatchSize)
 	}
 
-	// force reload: очистка таблиц
 	if req.ForceReload {
 		if err := s.vectorProvider.ClearEmbeddingsAndTopics(ctx); err != nil {
 			log.Warn("failed to clear embeddings/topics", slog.String("error", err.Error()))
@@ -350,7 +126,6 @@ func (s *Service) InitializeSystem(
 			slog.Int("offset", offset),
 		)
 
-		// get batch (use storage method which returns limited number)
 		batchArticles, err := s.articleProvider.SearchArticlesPaged(ctx, batchSize, offset)
 		if err != nil {
 			return nil, fmt.Errorf("%s: failed to get articles batch: %w", op, err)
@@ -364,7 +139,6 @@ func (s *Service) InitializeSystem(
 
 		batchProcessed := 0
 		for i, article := range batchArticles {
-			// progress log
 			if i%10 == 0 {
 				log.Info("batch progress",
 					slog.Int("batch_processed", i),
@@ -578,9 +352,6 @@ func (s *Service) SemanticSearchArticles(
 		desired = 10
 	}
 
-	// -----------------------------
-	// 1. Анализ запроса
-	// -----------------------------
 	qResp, err := s.mlService.AnalyzeUserQuery(ctx, req.Query, "article_search")
 	if err != nil {
 		return nil, fmt.Errorf("failed to analyze query: %w", err)
@@ -590,9 +361,6 @@ func (s *Service) SemanticSearchArticles(
 		return nil, fmt.Errorf("empty query vector from ML")
 	}
 
-	// -----------------------------
-	// 2. Получаем статьи
-	// -----------------------------
 	limit := desired + req.Offset
 	items, err := s.vectorProvider.ListArticlesForSemantic(ctx, limit)
 	if err != nil {
@@ -603,28 +371,32 @@ func (s *Service) SemanticSearchArticles(
 		return &models.SemanticArticleSearchResponse{}, nil
 	}
 
-	// -----------------------------
-	// 3. Готовим proto ArticleForSearch
-	// -----------------------------
 	protoArticles := make([]*agentv1.ArticleForSearch, 0, len(items))
 
 	for _, a := range items {
+		log.Info("embedding_check",
+			slog.String("doc_id", a.DocumentID),
+			slog.Int("raw_title_len", len(a.TitleEmbedding)),
+			slog.Int("raw_abstract_len", len(a.AbstractEmbedding)),
+		)
+
 		protoArticles = append(protoArticles, &agentv1.ArticleForSearch{
 			DocumentId:        a.DocumentID,
 			TitleRu:           a.TitleRu,
 			AbstractRu:        a.AbstractRu,
-			TitleEmbedding:    a.TitleEmbedding,    // []byte OK
-			AbstractEmbedding: a.AbstractEmbedding, // []byte OK
+			TitleEmbedding:    a.TitleEmbedding,
+			AbstractEmbedding: a.AbstractEmbedding,
 		})
-		log.Info("emb_len", slog.Int("title", len(a.TitleEmbedding)), slog.Int("abstract", len(a.AbstractEmbedding)))
 
+		log.Info("proto_embedding_check",
+			slog.String("doc_id", a.DocumentID),
+			slog.Int("proto_title_len", len(protoArticles[len(protoArticles)-1].TitleEmbedding)),
+			slog.Int("proto_abstract_len", len(protoArticles[len(protoArticles)-1].AbstractEmbedding)),
+		)
 	}
 
-	// -----------------------------
-	// 4. Proto запрос в AI Agent
-	// -----------------------------
 	protoReq := &agentv1.SemanticSearchRequest{
-		QueryVector: qResp.QueryVector, // []byte
+		QueryVector: qResp.QueryVector,
 		Articles:    protoArticles,
 		MaxResults:  int32(desired),
 	}
@@ -634,9 +406,6 @@ func (s *Service) SemanticSearchArticles(
 		return nil, fmt.Errorf("python semantic search failed: %w", err)
 	}
 
-	// -----------------------------
-	// 5. Собираем результат
-	// -----------------------------
 	results := make([]models.SemanticArticleResult, 0, len(protoResp.Results))
 
 	fastMeta := map[string]models.SemanticArticle{}

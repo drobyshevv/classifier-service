@@ -9,8 +9,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// Клиент для AI Agent в expert-search
-
 type MLServiceClient struct {
 	client agentv1.AIAnalysisServiceClient
 	conn   *grpc.ClientConn
@@ -95,7 +93,6 @@ func (c *MLServiceClient) AnalyzeArticleTopics(ctx context.Context, documentID, 
 		return nil, fmt.Errorf("failed to analyze article topics: %w", err)
 	}
 
-	// Конвертируем protobuf response в нашу модель
 	result := &ArticleAnalysisResult{
 		Topics:            convertProtoTopics(resp.Topics),
 		TitleEmbedding:    resp.TitleEmbedding,
@@ -109,7 +106,6 @@ func (c *MLServiceClient) Close() {
 	c.conn.Close()
 }
 
-// Вспомогательные структуры
 type ArticleAnalysisResult struct {
 	Topics            []ArticleTopic
 	TitleEmbedding    []byte

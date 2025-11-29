@@ -1,7 +1,6 @@
 import sys
 import os
 
-# Добавляем путь для импорта config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from config import *
@@ -14,14 +13,13 @@ def main():
     print("Starting data loading into existing database...")
     
     try:
-        # Проверяем, что база существует
+        
         if not os.path.exists(DB_PATH):
             print(f"Error: Database not found at {DB_PATH}")
             return
         
         print(f"Loading data into: {DB_PATH}")
         
-        # Загружаем данные в существующие таблицы
         load_documents()
         load_authors() 
         load_organizations()

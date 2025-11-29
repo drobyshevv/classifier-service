@@ -1,6 +1,5 @@
 package models
 
-// REQUEST STRUCTURES
 type InitializeRequest struct {
 	ForceReload       bool     `json:"force_reload"`
 	SkipExisting      bool     `json:"skip_existing"`
@@ -32,7 +31,6 @@ type ArticleSearchRequest struct {
 	MaxResults int32  `json:"max_results"`
 }
 
-// RESPONSE STRUCTURES
 type InitializeResponse struct {
 	JobID                     string `json:"job_id"`
 	Status                    string `json:"status"`
@@ -111,13 +109,12 @@ type ArticleTopic struct {
 	TopicType  string  `json:"topic_type"`
 }
 
-// Структура для передачи статьи с векторами в семантический поиск
 type SemanticArticle struct {
 	DocumentID        string
 	TitleRu           string
 	AbstractRu        string
-	TitleEmbedding    []byte // marshaled []float32
-	AbstractEmbedding []byte // marshaled []float32
+	TitleEmbedding    []byte
+	AbstractEmbedding []byte
 }
 
 type SemanticArticleSearchRequest struct {
